@@ -1,6 +1,11 @@
-name: TEST Ichimoku Scan
+name: Daily Ichimoku Scan (07:00 Warsaw)
 
 on:
+  schedule:
+    # cron w GitHub Actions jest w UTC
+    # Dwa wywołania pokrywają CET/CEST, a poniżej robimy guard na 07:00 Europe/Warsaw
+    - cron: "0 5 * * *"
+    - cron: "0 6 * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -8,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -21,42 +26,32 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run screener script
+      - name: Check Warsaw time == 07
+        id: war_time
         run: |
-          echo "=== START SCRIPT ==="
+          HOUR=$(TZ=Europe/Warsaw date +%H)
+          echo "Warsaw hour is: $HOUR"
+          if [ "$HOUR" != "07" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run screener
+        if: steps.war_time.outputs.skip != 'true'
+        run: |
           python -u ichimoku_runner.py
-          echo "=== SCRIPT FINISHED ==="
 
-      - name: Debug - list files
+      - name: Load email body from file
+        if: steps.war_time.outputs.skip != 'true'
+        id: mailbody
         run: |
-          echo "=== FILES IN WORKSPACE ==="
-          ls -la
+          echo "body<<'EOF'" >> $GITHUB_OUTPUT
+          cat email_body.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Debug - show first lines of signals.csv
-        run: |
-          echo "=== signals.csv (first 200 lines) ==="
-          head -n 200 signals.csv || echo "signals.csv not found"
-
-      - name: Debug - show first lines of failed.csv
-        run: |
-          echo "=== failed.csv (first 200 lines) ==="
-          head -n 200 failed.csv || echo "failed.csv not found"
-
-      - name: Upload CSV artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ichimoku-test-output
-          path: |
-            signals.csv
-            failed.csv
-
-      - name: Debug - check secrets presence (no values shown)
-        run: |
-          echo "SMTP_USERNAME set? -> ${{ secrets.SMTP_USERNAME != '' }}"
-          echo "SMTP_PASSWORD set? -> ${{ secrets.SMTP_PASSWORD != '' }}"
-          echo "MAIL_TO set? -> ${{ secrets.MAIL_TO != '' }}"
-
-      - name: Send test email with CSV
+      - name: Send email (no attachments)
+        if: steps.war_time.outputs.skip != 'true'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -64,12 +59,7 @@ jobs:
           secure: false
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "TEST Ichimoku screener"
+          subject: "Ichimoku screener — wyniki"
           to: ${{ secrets.MAIL_TO }}
           from: ${{ secrets.SMTP_USERNAME }}
-          body: |
-            To jest TEST workflow GitHub Actions.
-            W załączniku znajdują się pliki signals.csv oraz failed.csv.
-          attachments: |
-            signals.csv
-            failed.csv
+          body: ${{ steps.mailbody.outputs.body }}
