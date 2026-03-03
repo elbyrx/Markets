@@ -1,0 +1,8 @@
+df_out.to_csv("signals.csv", index=False, encoding="utf-8")
+
+if all_failed:
+    df_failed = pd.DataFrame(all_failed, columns=["index", "ticker"])
+    df_failed.to_csv("failed.csv", index=False, encoding="utf-8")
+else:
+    # żeby plik istniał zawsze (opcjonalnie)
+    pd.DataFrame(columns=["index", "ticker"]).to_csv("failed.csv", index=False, encoding="utf-8")
