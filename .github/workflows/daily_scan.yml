@@ -60,7 +60,7 @@ jobs:
           password: ${{ secrets.SMTP_PASSWORD }}
           subject: "TEST Ichimoku screener"
           to: ${{ secrets.MAIL_TO }}
-          from: ${{ secrets.MAIL_FROM }}
+          from: ${{ secrets.SMTP_USERNAME }}
           body: |
             To jest TEST workflow GitHub Actions.
             W załączniku znajdują się pliki signals.csv i failed.csv.
