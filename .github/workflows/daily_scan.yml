@@ -1,7 +1,7 @@
 name: TEST Ichimoku Scan
 
 on:
-  workflow_dispatch: {}   # tylko ręczne uruchomienie
+  workflow_dispatch: {}
 
 jobs:
   run:
@@ -24,7 +24,7 @@ jobs:
       - name: Run screener script
         run: |
           echo "=== START SCRIPT ==="
-          python ichimoku_runner.py
+          python -u ichimoku_runner.py
           echo "=== SCRIPT FINISHED ==="
 
       - name: Debug - list files
@@ -32,15 +32,15 @@ jobs:
           echo "=== FILES IN WORKSPACE ==="
           ls -la
 
-      - name: Debug - show signals.csv
+      - name: Debug - show first lines of signals.csv
         run: |
-          echo "=== CONTENT OF signals.csv ==="
-          cat signals.csv || echo "signals.csv not found"
+          echo "=== signals.csv (first 200 lines) ==="
+          head -n 200 signals.csv || echo "signals.csv not found"
 
-      - name: Debug - show failed.csv
+      - name: Debug - show first lines of failed.csv
         run: |
-          echo "=== CONTENT OF failed.csv ==="
-          cat failed.csv || echo "failed.csv not found"
+          echo "=== failed.csv (first 200 lines) ==="
+          head -n 200 failed.csv || echo "failed.csv not found"
 
       - name: Upload CSV artifacts
         uses: actions/upload-artifact@v4
@@ -50,7 +50,13 @@ jobs:
             signals.csv
             failed.csv
 
-      - name: Send test email
+      - name: Debug - check secrets presence (no values shown)
+        run: |
+          echo "SMTP_USERNAME set? -> ${{ secrets.SMTP_USERNAME != '' }}"
+          echo "SMTP_PASSWORD set? -> ${{ secrets.SMTP_PASSWORD != '' }}"
+          echo "MAIL_TO set? -> ${{ secrets.MAIL_TO != '' }}"
+
+      - name: Send test email with CSV
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -63,7 +69,7 @@ jobs:
           from: ${{ secrets.SMTP_USERNAME }}
           body: |
             To jest TEST workflow GitHub Actions.
-            W załączniku znajdują się pliki signals.csv i failed.csv.
+            W załączniku znajdują się pliki signals.csv oraz failed.csv.
           attachments: |
             signals.csv
             failed.csv
