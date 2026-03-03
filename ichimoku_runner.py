@@ -1,3 +1,8 @@
+# ichimoku_runner.py
+# Python 3.11+
+# Wklej ten plik do root repo (np. elbyrx/Finance) i commitnij.
+# Uwaga: do uruchomienia wymagane: pip install yfinance pandas numpy requests beautifulsoup4 lxml
+
 from __future__ import annotations
 
 import re
@@ -13,11 +18,10 @@ import requests
 import yfinance as yf
 from bs4 import BeautifulSoup
 
-# wycisz spam z yfinance
-logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+# ---- konfiguracja
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)  # mniej spamów od yfinance
 
 IndexName = Literal["SP500", "DJIA", "NASDAQ100", "DAX40", "CAC40", "WIG20", "MWIG40"]
-
 
 @dataclass(frozen=True)
 class CrossResult:
@@ -62,13 +66,14 @@ def pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
 # Normalizacja tickerów
 # =============================
 def to_yahoo_us(t: str) -> str:
-    return str(t).strip().replace(".", "-")  # BRK.B -> BRK-B
+    # BRK.B -> BRK-B
+    return str(t).strip().replace(".", "-")
 
 
 def normalize_dax_symbol(raw: str) -> str:
     x = str(raw).strip()
     x = x.replace("–", "-").replace("—", "-").replace(".", "-")
-    x = re.sub(r"-(DEU|DE)$", "", x, flags=re.IGNORECASE)  # usuń końcówki -DE/-DEU
+    x = re.sub(r"-(DEU|DE)$", "", x, flags=re.IGNORECASE)
     if "." in x:
         return x
     return f"{x}.DE"
@@ -82,12 +87,7 @@ def normalize_cac_symbol(raw: str) -> str:
 
 
 def normalize_gpw_to_yahoo(raw: str) -> str:
-    """
-    Stooq zwraca tickery GPW w stylu: 11B, PKO, PZU, XTB...
-    Dla Yahoo: .WA
-    """
     x = str(raw).strip().upper()
-    # tylko alfanumeryczne (GPW tickery)
     if not re.fullmatch(r"[A-Z0-9]{1,10}", x):
         return ""
     return f"{x}.WA"
@@ -109,7 +109,6 @@ def get_sp500_tickers() -> list[str]:
 def get_djia_tickers() -> list[str]:
     url = "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average"
     tables = read_html_tables(url)
-
     best = None
     best_score = -1
     for t in tables:
@@ -120,7 +119,6 @@ def get_djia_tickers() -> list[str]:
         if 20 <= score <= 60 and score > best_score:
             best = (t, col)
             best_score = score
-
     if not best:
         raise RuntimeError("DJIA: nie znaleziono tabeli komponentów.")
     df, col = best
@@ -131,7 +129,6 @@ def get_djia_tickers() -> list[str]:
 def get_nasdaq100_tickers() -> list[str]:
     url = "https://en.wikipedia.org/wiki/Nasdaq-100"
     tables = read_html_tables(url)
-
     best = None
     best_score = -1
     for t in tables:
@@ -142,7 +139,6 @@ def get_nasdaq100_tickers() -> list[str]:
         if score > best_score:
             best = (t, col)
             best_score = score
-
     if not best or best_score < 80:
         raise RuntimeError("NASDAQ100: nie znaleziono tabeli komponentów.")
     df, col = best
@@ -154,7 +150,6 @@ def get_nasdaq100_tickers() -> list[str]:
 def get_dax40_tickers() -> list[str]:
     url = "https://en.wikipedia.org/wiki/DAX"
     tables = read_html_tables(url)
-
     best = None
     best_score = -1
     for t in tables:
@@ -165,7 +160,6 @@ def get_dax40_tickers() -> list[str]:
         if 30 <= score <= 60 and score > best_score:
             best = (t, col)
             best_score = score
-
     if not best:
         raise RuntimeError("DAX40: nie znaleziono tabeli komponentów.")
     df, col = best
@@ -177,7 +171,6 @@ def get_dax40_tickers() -> list[str]:
 def get_cac40_tickers() -> list[str]:
     url = "https://en.wikipedia.org/wiki/CAC_40"
     tables = read_html_tables(url)
-
     best = None
     best_score = -1
     for t in tables:
@@ -188,7 +181,6 @@ def get_cac40_tickers() -> list[str]:
         if 30 <= score <= 60 and score > best_score:
             best = (t, col)
             best_score = score
-
     if not best:
         raise RuntimeError("CAC40: nie znaleziono tabeli komponentów.")
     df, col = best
@@ -197,41 +189,27 @@ def get_cac40_tickers() -> list[str]:
     return sorted(set(tickers))
 
 
-# --- Stooq: skład indeksu ---
+# --- Stooq: skład indeksu (WIG20, mWIG40) ---
 def get_stooq_index_tickers(symbol: str) -> list[str]:
-    """
-    Stooq:
-      wig20  -> https://stooq.pl/q/i/?s=wig20
-      mwig40 -> https://stooq.pl/q/i/?s=mwig40
-    Zwraca listę tickerów (bez .WA), potem mapujemy na Yahoo: .WA
-    """
     url = f"https://stooq.pl/q/i/?s={symbol}"
     tables = read_html_tables(url)
-
-    # zwykle jest jedna tabela; szukamy kolumny "Symbol"
     best = None
     for t in tables:
         col = pick_col(t, ["Symbol", "Ticker", "Walor"])
         if col:
             best = (t, col)
             break
-
     if not best:
-        # fallback: spróbuj wyciągnąć z pierwszej tabeli pierwszą kolumnę
         t = tables[0]
         col = t.columns[0]
         best = (t, col)
-
     df, col = best
     raw = df[col].astype(str).tolist()
-
     tickers = []
     for x in raw:
-        # czasem mogą być wpisy typu "11B" lub "11B.PL" – bierzemy część przed kropką
         base = str(x).strip().split(".")[0].upper()
         if re.fullmatch(r"[A-Z0-9]{1,10}", base):
             tickers.append(base)
-
     return sorted(set(tickers))
 
 
@@ -250,7 +228,6 @@ def add_ichimoku(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     high = out["High"]
     low = out["Low"]
-
     out["tenkan"] = (high.rolling(9).max() + low.rolling(9).min()) / 2
     out["kijun"] = (high.rolling(26).max() + low.rolling(26).min()) / 2
     out["senkou_a"] = ((out["tenkan"] + out["kijun"]) / 2).shift(26)
@@ -259,28 +236,23 @@ def add_ichimoku(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def check_signal(df: pd.DataFrame) -> str | None:
+    # potrzebujemy wystarczająco dużo danych (52 + shift + margin)
     if len(df) < 90:
         return None
-
     df = df.dropna(subset=["tenkan", "kijun", "senkou_a", "senkou_b", "Close"])
     if len(df) < 2:
         return None
-
     t_db = float(df["tenkan"].iloc[-2])
     k_db = float(df["kijun"].iloc[-2])
-
     t_y = float(df["tenkan"].iloc[-1])
     k_y = float(df["kijun"].iloc[-1])
     close_y = float(df["Close"].iloc[-1])
-
     sa = float(df["senkou_a"].iloc[-1])
     sb = float(df["senkou_b"].iloc[-1])
     cloud_upper = max(sa, sb)
     cloud_lower = min(sa, sb)
-
     bullish_cross = (t_db <= k_db) and (t_y > k_y)
     bearish_cross = (t_db >= k_db) and (t_y < k_y)
-
     if bullish_cross and close_y > cloud_upper:
         return "bullish"
     if bearish_cross and close_y < cloud_lower:
@@ -305,19 +277,15 @@ def download_once(batch: list[str], period: str) -> dict[str, pd.DataFrame]:
         threads=True,
         progress=False,
     )
-
     out: dict[str, pd.DataFrame] = {}
     if data is None or data.empty:
         return out
-
-    # 1 ticker -> flat DF
     if not isinstance(data.columns, pd.MultiIndex):
         if {"High", "Low", "Close"}.issubset(data.columns):
             df = data.dropna(subset=["High", "Low", "Close"])
             if not df.empty:
                 out[batch[0]] = df
         return out
-
     available = set(data.columns.get_level_values(0))
     for t in batch:
         if t not in available:
@@ -341,27 +309,21 @@ def batch_download_with_retry(
 ) -> tuple[dict[str, pd.DataFrame], list[str]]:
     ok: dict[str, pd.DataFrame] = {}
     remaining = list(dict.fromkeys(tickers))
-
     for attempt in range(retries + 1):
         if not remaining:
             break
-
         for part in split_chunks(remaining, chunk):
             got = download_once(part, period)
             ok.update(got)
-
         remaining = [t for t in remaining if t not in ok]
-
         if remaining and attempt < retries:
             time.sleep(backoff_s * (attempt + 1))
-
     return ok, remaining
 
 
 def screen_index(index: IndexName, tickers: list[str]) -> tuple[list[CrossResult], list[str]]:
     price_map, failed = batch_download_with_retry(tickers=tickers, period="1y")
     results: list[CrossResult] = []
-
     for ticker, df in price_map.items():
         try:
             df = add_ichimoku(df)
@@ -370,7 +332,6 @@ def screen_index(index: IndexName, tickers: list[str]) -> tuple[list[CrossResult
                 results.append(CrossResult(index=index, ticker=ticker, direction=signal))  # type: ignore[arg-type]
         except Exception:
             continue
-
     return results, failed
 
 
@@ -406,6 +367,7 @@ def main():
         if failed:
             print(f"  -> nie pobrano danych dla: {len(failed)} tickerów (brak danych/timeout)")
 
+    # --- przygotuj df_out i df_failed (ZAWSZE zdefiniowane) ---
     if not all_results:
         print("\nBrak sygnałów.")
         df_out = pd.DataFrame(columns=["index", "ticker", "direction"])
@@ -415,27 +377,30 @@ def main():
         print("\nSYGNAŁY:")
         print(df_out.to_string(index=False))
 
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    signals_file = f"ichimoku_signals_{ts}.csv"
-    df_out.to_csv(signals_file, index=False, encoding="utf-8")
-    print(f"\nZapisano plik: {signals_file}")
-
     if all_failed:
         df_failed = pd.DataFrame(all_failed, columns=["index", "ticker"])
-        failed_file = f"ichimoku_failed_{ts}.csv"
-        df_failed.to_csv(failed_file, index=False, encoding="utf-8")
-        print(f"Zapisano plik: {failed_file}")
+    else:
+        df_failed = pd.DataFrame(columns=["index", "ticker"])
+
+    # Zapis: stałe nazwy wymagane przez workflow
+    try:
+        df_out.to_csv("signals.csv", index=False, encoding="utf-8")
+        df_failed.to_csv("failed.csv", index=False, encoding="utf-8")
+        print("Zapisano pliki: signals.csv i failed.csv")
+    except Exception as e:
+        print(f"ERROR przy zapisie signals.csv / failed.csv: {e}")
+
+    # Dodatkowy zapis z timestampem (archiwum)
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        df_out.to_csv(f"ichimoku_signals_{timestamp}.csv", index=False, encoding="utf-8")
+        df_failed.to_csv(f"ichimoku_failed_{timestamp}.csv", index=False, encoding="utf-8")
+        print(f"Zapisano pliki archiwalne: ichimoku_signals_{timestamp}.csv, ichimoku_failed_{timestamp}.csv")
+    except Exception as e:
+        print(f"WARNING: nie udało się zapisać plików archiwalnych: {e}")
+
+    print("Koniec skanu.")
 
 
 if __name__ == "__main__":
     main()
-
-
-df_out.to_csv("signals.csv", index=False, encoding="utf-8")
-
-if all_failed:
-    df_failed = pd.DataFrame(all_failed, columns=["index", "ticker"])
-    df_failed.to_csv("failed.csv", index=False, encoding="utf-8")
-else:
-    #żeby plik istniał zawsze (opcjonalnie)
-    pd.DataFrame(columns=["index", "ticker"]).to_csv("failed.csv", index=False, encoding="utf-8")
