@@ -1,0 +1,62 @@
+name: Daily Ichimoku Scan
+
+on:
+  schedule:
+    # Dwa strzały, bo cron jest w UTC, a PL ma CET/CEST.
+    - cron: "0 5 * * *"  # 07:00 w Polsce latem (CEST)
+    - cron: "0 6 * * *"  # 07:00 w Polsce zimą (CET)
+  workflow_dispatch: {}   # możliwość ręcznego uruchomienia
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Guard: uruchom tylko gdy w Europe/Warsaw jest 07:00
+      - name: Check Warsaw time == 07
+        id: war_time
+        run: |
+          HOUR=$(TZ=Europe/Warsaw date +%H)
+          echo "Warsaw hour is: $HOUR"
+          if [ "$HOUR" != "07" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run screener
+        if: steps.war_time.outputs.skip != 'true'
+        run: |
+          python ichimoku_runner.py
+
+      - name: Send email with CSV
+        if: steps.war_time.outputs.skip != 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          secure: false
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "Ichimoku screener — wyniki"
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_FROM }}
+          body: |
+            Cześć,
+            W załączniku masz wyniki screenera (signals.csv) oraz listę tickerów bez danych (failed.csv).
+          attachments: |
+            signals.csv
+            failed.csv
