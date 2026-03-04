@@ -1,10 +1,10 @@
 # ichimoku_runner.py
 # Python 3.11+
 # Generuje:
-# - signals.csv / failed.csv (opcjonalnie zostawiamy jako artefakty/debug)
-# - email_body.txt (treść maila — TO wykorzysta workflow)
+# - email_body.html (HTML treści maila)
+# - email_subject.txt (temat maila z liczbą sygnałów)
 #
-# Wymaga: yfinance pandas numpy requests beautifulsoup4 lxml
+# Wymaga: yfinance pandas numpy requests lxml
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ import yfinance as yf
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 IndexName = Literal["SP500", "DJIA", "NASDAQ100", "DAX40", "CAC40", "WIG20", "MWIG40"]
+
 
 @dataclass(frozen=True)
 class CrossResult:
@@ -67,7 +68,7 @@ def pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
 # Ticker normalization
 # =============================
 def to_yahoo_us(t: str) -> str:
-    return str(t).strip().replace(".", "-")  # BRK.B -> BRK-B
+    return str(t).strip().replace(".", "-")
 
 
 def normalize_dax_symbol(raw: str) -> str:
@@ -198,7 +199,6 @@ def get_cac40_tickers() -> list[str]:
 
 
 def get_stooq_index_tickers(symbol: str) -> list[str]:
-    # symbol: "wig20", "mwig40"
     url = f"https://stooq.pl/q/i/?s={symbol}"
     tables = read_html_tables(url)
 
@@ -299,7 +299,6 @@ def download_once(batch: list[str], period: str) -> dict[str, pd.DataFrame]:
     if data is None or data.empty:
         return out
 
-    # single ticker -> flat
     if not isinstance(data.columns, pd.MultiIndex):
         if {"High", "Low", "Close"}.issubset(data.columns):
             df = data.dropna(subset=["High", "Low", "Close"])
@@ -358,52 +357,119 @@ def screen_index(index: IndexName, tickers: list[str]) -> tuple[list[CrossResult
                 results.append(CrossResult(index=index, ticker=ticker, direction=signal))  # type: ignore[arg-type]
         except Exception:
             continue
-    failed_pairs = [(index, t) for t in failed]
-    return results, failed_pairs
+    return results, [(index, t) for t in failed]
 
 
 # =============================
-# Email body formatting
+# HTML Email formatting
 # =============================
-def format_email_body(df_out: pd.DataFrame, df_failed: pd.DataFrame, run_dt: datetime) -> str:
-    ts = run_dt.strftime("%Y-%m-%d %H:%M:%S")
-    lines: list[str] = []
-    lines.append(f"Ichimoku screener (Tenkan/Kijun cross + cena vs chmura)")
-    lines.append(f"Run: {ts} (Europe/Warsaw)")
-    lines.append("")
+def escape_html(s: str) -> str:
+    return (
+        str(s)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
 
-    if df_out.empty:
-        lines.append("Brak sygnałów na dziś.")
-    else:
-        lines.append(f"Sygnały: {len(df_out)}")
-        lines.append("")
-        # Grupowanie: index -> direction -> tickers
+
+def html_table(rows: list[tuple[str, str]], title: str) -> str:
+    # rows: [(Index, "ticker1, ticker2,..."), ...]
+    if not rows:
+        return f"""
+        <h3 style="margin:16px 0 8px 0;">{escape_html(title)}</h3>
+        <p style="margin:0;">Brak</p>
+        """
+
+    tr = []
+    for idx, tickers in rows:
+        tr.append(
+            f"<tr>"
+            f"<td style='padding:8px;border:1px solid #ddd;vertical-align:top;'><b>{escape_html(idx)}</b></td>"
+            f"<td style='padding:8px;border:1px solid #ddd;'>{escape_html(tickers)}</td>"
+            f"</tr>"
+        )
+    return f"""
+    <h3 style="margin:16px 0 8px 0;">{escape_html(title)}</h3>
+    <table style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:14px;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:8px;border:1px solid #ddd;background:#f6f6f6;">Index</th>
+          <th style="text-align:left;padding:8px;border:1px solid #ddd;background:#f6f6f6;">Tickers</th>
+        </tr>
+      </thead>
+      <tbody>
+        {''.join(tr)}
+      </tbody>
+    </table>
+    """
+
+
+def build_html_email(df_out: pd.DataFrame, df_failed: pd.DataFrame, run_dt: datetime) -> tuple[str, str]:
+    # subject
+    n_signals = len(df_out)
+    date_str = run_dt.strftime("%Y-%m-%d")
+    subject = f"Ichimoku — {n_signals} sygnałów — {date_str}"
+
+    # group by direction & index
+    bullish_rows: list[tuple[str, str]] = []
+    bearish_rows: list[tuple[str, str]] = []
+
+    if not df_out.empty:
         for idx in sorted(df_out["index"].unique()):
             sub = df_out[df_out["index"] == idx]
-            lines.append(f"[{idx}]")
-            for direction in ["bullish", "bearish"]:
-                sub2 = sub[sub["direction"] == direction]
-                if sub2.empty:
-                    continue
-                tickers = ", ".join(sub2["ticker"].tolist())
-                lines.append(f"  {direction}: {tickers}")
-            lines.append("")
+            b = sub[sub["direction"] == "bullish"]["ticker"].tolist()
+            s = sub[sub["direction"] == "bearish"]["ticker"].tolist()
+            if b:
+                bullish_rows.append((idx, ", ".join(b)))
+            if s:
+                bearish_rows.append((idx, ", ".join(s)))
 
-    # Failed (opcjonalnie, krótko)
+    # optional failed summary
+    failed_html = ""
     if not df_failed.empty:
-        lines.append(f"Tickery bez danych/timeout: {len(df_failed)}")
-        # pokaż max 30, żeby nie spamować
         show = df_failed.head(30)
         grouped = show.groupby("index")["ticker"].apply(list).to_dict()
+        li = []
         for idx, tks in grouped.items():
-            lines.append(f"  {idx}: {', '.join(tks)}")
+            li.append(f"<li><b>{escape_html(idx)}</b>: {escape_html(', '.join(tks))}</li>")
+        more = ""
         if len(df_failed) > 30:
-            lines.append(f"  ... oraz {len(df_failed) - 30} kolejnych")
-        lines.append("")
+            more = f"<p style='margin:8px 0 0 0;color:#666;'>… oraz {len(df_failed) - 30} kolejnych</p>"
 
-    lines.append("—")
-    lines.append("Wiadomość wygenerowana automatycznie przez GitHub Actions.")
-    return "\n".join(lines)
+        failed_html = f"""
+        <h3 style="margin:20px 0 8px 0;">Tickery bez danych/timeout ({len(df_failed)})</h3>
+        <ul style="margin:0 0 0 18px;padding:0;font-family:Arial,sans-serif;font-size:14px;">
+          {''.join(li)}
+        </ul>
+        {more}
+        """
+
+    run_str = run_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    body = f"""<!doctype html>
+<html>
+  <body style="font-family:Arial,sans-serif;">
+    <h2 style="margin:0 0 6px 0;">Ichimoku screener</h2>
+    <p style="margin:0 0 14px 0;color:#555;">
+      Tenkan/Kijun cross (wczoraj) + filtr ceny względem chmury (dziś).<br/>
+      Run: <b>{escape_html(run_str)}</b> (Europe/Warsaw)
+    </p>
+
+    {html_table(bullish_rows, "Bullish (cena nad chmurą)")}
+    {html_table(bearish_rows, "Bearish (cena pod chmurą)")}
+
+    {failed_html}
+
+    <hr style="border:none;border-top:1px solid #eee;margin:18px 0;">
+    <p style="margin:0;color:#777;font-size:12px;">
+      Wiadomość wygenerowana automatycznie przez GitHub Actions.
+    </p>
+  </body>
+</html>
+"""
+    return subject, body
 
 
 # =============================
@@ -434,13 +500,12 @@ def main():
         if failed_pairs:
             print(f"  -> nie pobrano danych dla: {len(failed_pairs)} tickerów (brak danych/timeout)")
 
-    # df_out / df_failed zawsze zdefiniowane
     if not all_results:
-        print("\nBrak sygnałów.")
         df_out = pd.DataFrame(columns=["index", "ticker", "direction"])
+        print("\nBrak sygnałów.")
     else:
         df_out = pd.DataFrame([r.__dict__ for r in all_results])[["index", "ticker", "direction"]]
-        df_out = df_out.sort_values(["index", "direction", "ticker"])
+        df_out = df_out.sort_values(["direction", "index", "ticker"])
         print("\nSYGNAŁY:")
         print(df_out.to_string(index=False))
 
@@ -449,16 +514,15 @@ def main():
     else:
         df_failed = pd.DataFrame(columns=["index", "ticker"])
 
-    # (opcjonalnie) zostawiamy CSV jako debug/artefakty
-    df_out.to_csv("signals.csv", index=False, encoding="utf-8")
-    df_failed.to_csv("failed.csv", index=False, encoding="utf-8")
+    subject, html = build_html_email(df_out, df_failed, run_dt)
 
-    # Treść maila do pliku
-    body = format_email_body(df_out, df_failed, run_dt)
-    with open("email_body.txt", "w", encoding="utf-8") as f:
-        f.write(body)
+    with open("email_subject.txt", "w", encoding="utf-8") as f:
+        f.write(subject.strip())
 
-    print("Zapisano: email_body.txt (treść maila)")
+    with open("email_body.html", "w", encoding="utf-8") as f:
+        f.write(html)
+
+    print("Zapisano: email_subject.txt i email_body.html")
     print("Koniec skanu.")
 
 
