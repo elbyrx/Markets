@@ -1,0 +1,74 @@
+name: TEST Ichimoku HTML Email
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run screener (generate email_subject.txt + email_body.html)
+        run: |
+          echo "=== START SCRIPT ==="
+          python -u ichimoku_runner.py
+          echo "=== SCRIPT FINISHED ==="
+
+      - name: Debug - show subject
+        run: |
+          echo "=== email_subject.txt ==="
+          cat email_subject.txt || (echo "email_subject.txt missing" && exit 1)
+
+      - name: Debug - show first lines of HTML
+        run: |
+          echo "=== email_body.html (first 60 lines) ==="
+          head -n 60 email_body.html || (echo "email_body.html missing" && exit 1)
+
+      - name: Upload artifacts (subject + html)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ichimoku-email-html
+          path: |
+            email_subject.txt
+            email_body.html
+
+      - name: Load subject into output
+        id: subj
+        run: |
+          SUBJECT="$(cat email_subject.txt)"
+          echo "subject=$SUBJECT" >> $GITHUB_OUTPUT
+
+      - name: Load HTML body into output
+        id: body
+        run: |
+          {
+            echo "html<<EOF"
+            cat email_body.html
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Send test email (HTML, no attachments)
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          secure: false
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: ${{ steps.subj.outputs.subject }}
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.SMTP_USERNAME }}
+          html_body: ${{ steps.body.outputs.html }}
