@@ -1,10 +1,14 @@
-name: TEST Ichimoku HTML Email
+name: Daily Ichimoku Scan (07:00 Warsaw)
 
 on:
+  schedule:
+    # cron jest w UTC; dwa wpisy + guard poniżej (Warsaw 07:00 CET/CEST)
+    - cron: "0 5 * * *"
+    - cron: "0 6 * * *"
   workflow_dispatch: {}
 
 jobs:
-  test:
+  run:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,37 +25,31 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run screener (generate email_subject.txt + email_body.html)
+      - name: Check Warsaw time == 07
+        id: war_time
         run: |
-          echo "=== START SCRIPT ==="
+          HOUR=$(TZ=Europe/Warsaw date +%H)
+          echo "Warsaw hour is: $HOUR"
+          if [ "$HOUR" != "07" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run screener
+        if: steps.war_time.outputs.skip != 'true'
+        run: |
           python -u ichimoku_runner.py
-          echo "=== SCRIPT FINISHED ==="
 
-      - name: Debug - show subject
-        run: |
-          echo "=== email_subject.txt ==="
-          cat email_subject.txt || (echo "email_subject.txt missing" && exit 1)
-
-      - name: Debug - show first lines of HTML
-        run: |
-          echo "=== email_body.html (first 60 lines) ==="
-          head -n 60 email_body.html || (echo "email_body.html missing" && exit 1)
-
-      - name: Upload artifacts (subject + html)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ichimoku-email-html
-          path: |
-            email_subject.txt
-            email_body.html
-
-      - name: Load subject into output
+      - name: Load subject
+        if: steps.war_time.outputs.skip != 'true'
         id: subj
         run: |
           SUBJECT="$(cat email_subject.txt)"
           echo "subject=$SUBJECT" >> $GITHUB_OUTPUT
 
-      - name: Load HTML body into output
+      - name: Load HTML body
+        if: steps.war_time.outputs.skip != 'true'
         id: body
         run: |
           {
@@ -60,7 +58,8 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Send test email (HTML, no attachments)
+      - name: Send email (HTML, no attachments)
+        if: steps.war_time.outputs.skip != 'true'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
