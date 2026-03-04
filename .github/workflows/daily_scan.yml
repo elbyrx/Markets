@@ -1,15 +1,10 @@
-name: Daily Ichimoku Scan (07:00 Warsaw)
+name: TEST Ichimoku HTML Email
 
 on:
-  schedule:
-    # cron w GitHub Actions jest w UTC
-    # Dwa wywołania pokrywają CET/CEST, a poniżej robimy guard na 07:00 Europe/Warsaw
-    - cron: "0 5 * * *"
-    - cron: "0 6 * * *"
   workflow_dispatch: {}
 
 jobs:
-  run:
+  test:
     runs-on: ubuntu-latest
 
     steps:
@@ -26,32 +21,46 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Check Warsaw time == 07
-        id: war_time
+      - name: Run screener (generate email_subject.txt + email_body.html)
         run: |
-          HOUR=$(TZ=Europe/Warsaw date +%H)
-          echo "Warsaw hour is: $HOUR"
-          if [ "$HOUR" != "07" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            echo "skip=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Run screener
-        if: steps.war_time.outputs.skip != 'true'
-        run: |
+          echo "=== START SCRIPT ==="
           python -u ichimoku_runner.py
+          echo "=== SCRIPT FINISHED ==="
 
-      - name: Load email body from file
-        if: steps.war_time.outputs.skip != 'true'
-        id: mailbody
+      - name: Debug - show subject
         run: |
-          echo "body<<'EOF'" >> $GITHUB_OUTPUT
-          cat email_body.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "=== email_subject.txt ==="
+          cat email_subject.txt || (echo "email_subject.txt missing" && exit 1)
 
-      - name: Send email (no attachments)
-        if: steps.war_time.outputs.skip != 'true'
+      - name: Debug - show first lines of HTML
+        run: |
+          echo "=== email_body.html (first 60 lines) ==="
+          head -n 60 email_body.html || (echo "email_body.html missing" && exit 1)
+
+      - name: Upload artifacts (subject + html)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ichimoku-email-html
+          path: |
+            email_subject.txt
+            email_body.html
+
+      - name: Load subject into output
+        id: subj
+        run: |
+          SUBJECT="$(cat email_subject.txt)"
+          echo "subject=$SUBJECT" >> $GITHUB_OUTPUT
+
+      - name: Load HTML body into output
+        id: body
+        run: |
+          {
+            echo "html<<EOF"
+            cat email_body.html
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Send test email (HTML, no attachments)
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -59,7 +68,7 @@ jobs:
           secure: false
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "Ichimoku screener — wyniki"
+          subject: ${{ steps.subj.outputs.subject }}
           to: ${{ secrets.MAIL_TO }}
           from: ${{ secrets.SMTP_USERNAME }}
-          body: ${{ steps.mailbody.outputs.body }}
+          html_body: ${{ steps.body.outputs.html }}
